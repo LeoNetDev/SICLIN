@@ -1,0 +1,78 @@
+# Datos, correo, sesiones y volúmenes exclusivos de la demostración.
+x-demo-app: &demo-app
+  image: siclin-app:local
+  env_file: .env
+  environment:
+    APP_ENV: local
+    APP_URL: http://localhost:8010
+    SICLIN_DEMO: "true"
+    SESSION_COOKIE: siclin_demo_session
+    DB_CONNECTION: pgsql
+    DB_HOST: postgres-db
+    DB_DATABASE: siclin_demo
+    DB_USERNAME: siclin_demo
+    DB_PASSWORD: ${DEMO_DB_PASSWORD:?Ejecuta scripts/init-env.py}
+    MAIL_MODE: local
+    MAIL_HOST: mailpit
+    MAIL_PORT: 1025
+    MAIL_SCHEME: smtp
+    MAIL_USERNAME: ""
+    MAIL_PASSWORD: ""
+    MAIL_MAILER: smtp
+    ALLOWED_EMAIL_DOMAINS: ""
+    QUEUE_CONNECTION: database
+  volumes:
+    - demo_storage:/app/storage
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+services:
+  postgres-db:
+    image: postgres:16.10-alpine
+    environment:
+      POSTGRES_DB: siclin_demo
+      POSTGRES_USER: siclin_demo
+      POSTGRES_PASSWORD: ${DEMO_DB_PASSWORD}
+    volumes:
+      - demo_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U siclin_demo -d siclin_demo]
+      interval: 2s
+      retries: 30
+  mailpit:
+    image: axllent/mailpit:v1.27.4
+    ports: ['127.0.0.1:8030:8025']
+  migrate:
+    <<: *demo-app
+    command: [php, artisan, migrate, --force, --no-interaction]
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+  app:
+    <<: *demo-app
+    healthcheck:
+      test: [CMD, php, artisan, siclin:health, --no-interaction]
+      interval: 3s
+      retries: 30
+  web:
+    image: siclin-web:local
+    ports: ['127.0.0.1:8010:80']
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1/up]
+      interval: 3s
+      retries: 30
+  queue-mail:
+    <<: *demo-app
+    command: [php, artisan, queue:work, database, --queue=mail-local, --sleep=1, --tries=3, --timeout=30]
+  queue-optimization:
+    <<: *demo-app
+    command: [php, artisan, queue:work, database, --queue=optimization, --sleep=1, --tries=1, --timeout=180]
+  scheduler:
+    <<: *demo-app
+    command: [php, artisan, schedule:work, --no-interaction]
+volumes:
+  demo_pgdata:
+  demo_storage:

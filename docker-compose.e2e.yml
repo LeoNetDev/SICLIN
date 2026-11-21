@@ -1,0 +1,71 @@
+x-e2e-app: &e2e-app
+  image: siclin-app:local
+  env_file: .env
+  environment:
+    APP_ENV: local
+    APP_URL: http://localhost:8001
+    SESSION_COOKIE: siclin_e2e_session
+    DB_HOST: postgres-db
+    DB_DATABASE: siclin_e2e_test
+    DB_USERNAME: siclin_e2e
+    DB_PASSWORD: ${TEST_DB_PASSWORD:?Ejecuta scripts/prepare-test-db.py}
+    MAIL_MODE: local
+    MAIL_HOST: mailpit
+    MAIL_PORT: 1025
+    MAIL_SCHEME: smtp
+    MAIL_USERNAME: ""
+    MAIL_PASSWORD: ""
+    MAIL_MAILER: smtp
+    QUEUE_CONNECTION: database
+  volumes:
+    - test_storage:/app/storage
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+services:
+  postgres-db:
+    image: postgres:16.10-alpine
+    environment:
+      POSTGRES_DB: siclin_e2e_test
+      POSTGRES_USER: siclin_e2e
+      POSTGRES_PASSWORD: ${TEST_DB_PASSWORD}
+    volumes:
+      - test_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U siclin_e2e -d siclin_e2e_test]
+      interval: 2s
+      retries: 30
+  mailpit:
+    image: axllent/mailpit:v1.27.4
+    ports: ['127.0.0.1:8026:8025']
+  migrate:
+    <<: *e2e-app
+    command: [php, artisan, migrate, --force, --no-interaction]
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+  app:
+    <<: *e2e-app
+    healthcheck:
+      test: [CMD, php, artisan, siclin:health, --no-interaction]
+      interval: 3s
+      retries: 30
+  web:
+    image: siclin-web:local
+    ports: ['127.0.0.1:8001:80']
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1/up]
+      interval: 3s
+      retries: 30
+  queue-mail:
+    <<: *e2e-app
+    command: [php, artisan, queue:work, database, --queue=mail-local, --sleep=1, --tries=3, --timeout=30]
+  queue-optimization:
+    <<: *e2e-app
+    command: [php, artisan, queue:work, database, --queue=optimization, --sleep=1, --tries=1, --timeout=180]
+volumes:
+  test_pgdata:
+  test_storage:

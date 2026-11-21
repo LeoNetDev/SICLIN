@@ -1,0 +1,81 @@
+x-app: &app
+  image: siclin-app:local
+  env_file: .env
+  environment:
+    DB_HOST: postgres-db
+  volumes:
+    - portal_storage:/app/storage
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+  restart: unless-stopped
+services:
+  postgres-db:
+    image: postgres:16.10-alpine
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-rotes_clinicos_db}
+      POSTGRES_USER: ${DB_USERNAME:-unifranz_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Ejecuta scripts/dev-up.sh}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 3s
+      timeout: 5s
+      retries: 30 
+    restart: unless-stopped
+  mailpit:
+    image: axllent/mailpit:v1.27.4
+    ports:
+      - '127.0.0.1:${MAILPIT_PORT:-8025}:8025'
+    healthcheck:
+      test: [CMD, /mailpit, readyz]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+  migrate:
+    <<: *app
+    command: [php, artisan, migrate, --force, --no-interaction]
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+    restart: 'no'
+  app:
+    <<: *app
+    build:
+      context: ./portal
+      target: app
+    healthcheck:
+      test: [CMD, php, artisan, siclin:health, --no-interaction]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+  web:
+    image: siclin-web:local
+    build:
+      context: ./portal
+      target: web
+    ports:
+      - '127.0.0.1:${WEB_PORT:-8000}:80'
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1/up]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+  queue-mail:
+    <<: *app
+    command: [php, artisan, queue:work, database, '--queue=mail-${MAIL_MODE:-local}', --sleep=1, --tries=3, --timeout=30, --max-time=3600]
+  queue-optimization:
+    <<: *app
+    command: [php, artisan, queue:work, database, --queue=optimization, --sleep=1, --tries=3, --timeout=180, --max-time=3600]
+  scheduler:
+    <<: *app
+    command: [php, artisan, schedule:work, --no-interaction]
+volumes:
+  pgdata:
+  portal_storage:
